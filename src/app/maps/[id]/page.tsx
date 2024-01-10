@@ -5,12 +5,14 @@ import { Map, GeolocateControl, NavigationControl, LngLatBounds } from 'react-ma
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 import { getOverpassResponseJsonWithCache } from '@/utils/getOverpassResponse';
+import { convertToJSON } from '@/utils/convertToGeoJSON';
 import { useEffect, useState } from 'react';
 import osmtogeojson from 'osmtogeojson';
 import { Md5 } from 'ts-md5';
 import { FeatureCollection } from 'geojson';
 import { GeoJsonToSomethings } from '@/components/GeoJsonToSomethings';
 import { FaHospital, FaSchool } from 'react-icons/fa';
+import { IoHomeOutline } from 'react-icons/io5'; // IoHomeOutline はシェルターのアイコンとして使用
 
 // @ts-ignore
 import * as turf from '@turf/turf';
@@ -41,7 +43,23 @@ const schoolsStyle = {
   emoji: '🏫',
 };
 
+const shelterStyle = {
+  color: 'rgb(0, 0, 0)',
+  fillColor: 'rgb(0, 0, 255)',
+  emoji: '🚪',
+};
+
 const schoolsQuery = `
+[out:json][timeout:30000];
+rel(4800240);
+map_to_area->.a;
+(
+  nwr["amenity"="school"](area.a);
+);
+out geom;
+`;
+
+const sheltersQuery = `
 [out:json][timeout:30000];
 rel(4800240);
 map_to_area->.a;
@@ -59,6 +77,10 @@ const overpassQueryWithStyleList = [
   {
     query: schoolsQuery,
     style: schoolsStyle,
+  },
+  {
+    query: 'shelter',
+    style: shelterStyle,
   },
 ];
 
@@ -90,25 +112,59 @@ const Page = () => {
   useEffect(() => {
     const thisEffect = async () => {
       setLoaded(true);
+      const md5 = new Md5();
       for (const overpassQueryWithStyle of overpassQueryWithStyleList) {
-        const overpassResJson = await getOverpassResponseJsonWithCache(overpassQueryWithStyle.query);
-        const newGeojson = osmtogeojson(overpassResJson);
-        const md5 = new Md5();
-        md5.appendStr(overpassQueryWithStyle.query);
-        const hash = md5.end();
+        let overpassResJson;
+        let newGeojson;
+        let hash;
+
+        if (overpassQueryWithStyle.query === 'shelter') {
+          // dbからlocationを抜いてきてダミーデータを生成
+          const location = { lat: 36.62856087, lon: 136.6203539 };
+          overpassResJson = await convertToJSON(location);
+          newGeojson = osmtogeojson(overpassResJson);
+          hash = 'shelter';
+        } else {
+          // 通常のデータ取得処理
+          overpassResJson = await getOverpassResponseJsonWithCache(overpassQueryWithStyle.query);
+          newGeojson = osmtogeojson(overpassResJson);
+          md5.appendStr(overpassQueryWithStyle.query);
+          hash = md5.end();
+        }
+
         setGeoJsonWithStyleList((prev) => {
+          const shelterId = 'shelter';
+
+          // 特定の id の場合は無条件で新しい要素を追加
+          if (hash === shelterId) {
+            return [
+              ...prev,
+              {
+                id: shelterId,
+                style: overpassQueryWithStyle.style || {},
+                geojson: newGeojson,
+                geoIndex: prev.length, // 末尾に追加されるため
+              },
+            ];
+          }
+
+          // それ以外の場合は同じ条件を維持
           if (prev.find((item) => item.id === hash)) return prev;
+
+          // 新しい要素を追加
           return [
             ...prev,
             {
               id: hash as string,
               style: overpassQueryWithStyle.style || {},
               geojson: newGeojson,
+              geoIndex: prev.length, // 末尾に追加されるため
             },
           ];
         });
       }
     };
+
     if (!loaded) {
       setLoaded(true);
       thisEffect();
@@ -118,23 +174,30 @@ const Page = () => {
   useEffect(() => {
     if (!geoJsonWithStyleList) return;
     if (!currentBounds) return;
+
     setGeoJsonWithStyleListInMapBounds(
       geoJsonWithStyleList.map((geoJsonWithStyle) => {
-        // currentBounds is a LngLatBounds object
-        // bbox extent in minX, minY, maxX, maxY order
-        // convert currentBounds to bbox array
         const currentMapBbox = [
           currentBounds.getWest(),
           currentBounds.getSouth(),
           currentBounds.getEast(),
           currentBounds.getNorth(),
         ];
-        const geojsonInMapBounds = geoJsonWithStyle.geojson.features.filter((feature) => {
-          // use turf.js to check if feature is in map bounds
-          const poly = turf.bboxPolygon(currentMapBbox);
-          const isInside = turf.booleanContains(poly, feature);
-          return isInside;
-        });
+
+        let geojsonInMapBounds;
+
+        if (geoJsonWithStyle.id === 'shelter') {
+          // 'shelter' の場合は無条件で全ての features を表示
+          geojsonInMapBounds = geoJsonWithStyle.geojson.features;
+        } else {
+          // それ以外の場合は turf.js を使用して範囲内の features を絞り込む
+          geojsonInMapBounds = geoJsonWithStyle.geojson.features.filter((feature) => {
+            const poly = turf.bboxPolygon(currentMapBbox);
+            const isInside = turf.booleanContains(poly, feature);
+            return isInside;
+          });
+        }
+
         return {
           ...geoJsonWithStyle,
           geojson: {
@@ -218,6 +281,10 @@ const Page = () => {
                       <span className="mb-2 truncate pl-0.5">病院</span>
                     )}
 
+                    {emoji === '🚪' && index === 0 && geoIndex === 2 && (
+                      <span className="mb-2 truncate pl-0.5">避難所</span>
+                    )}
+
                     {emoji === '🏫' && index === 0 && geoIndex === 1 && (
                       <span className="mb-2 truncate pl-0.5">学校</span>
                     )}
@@ -233,6 +300,7 @@ const Page = () => {
                       <div className="flex w-full flex-row items-center">
                         <span className="flex h-10 max-h-10 min-h-10 w-10 min-w-10 max-w-10 items-center justify-center rounded-full bg-zinc-500">
                           {emoji === '🏥' && <FaHospital className="h-5 w-5 fill-zinc-50 pb-0.5" />}
+                          {emoji === '🚪' && <IoHomeOutline className="h-5 w-5 fill-zinc-50 pb-1" />}
                           {emoji === '🏫' && <FaSchool className="h-5 w-5 fill-zinc-50 pb-1" />}
                         </span>
                         <div className="flex flex-col truncate pl-4">
