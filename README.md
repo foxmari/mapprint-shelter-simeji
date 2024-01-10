@@ -2,7 +2,7 @@
 
 pnpm i
 
-docker compose up -d
+docker-compose up -d
 
 pnpx prisma generate
 
@@ -30,7 +30,7 @@ Use pnpx prisma db seed to incorporate initial data.
 docker-compose up 　
 pnpx prisma generate
 pnpx prisma migrate dev 　
-pnpx prisma db seed
+pnpx ts-node --compiler-options '{"module":"CommonJS"}' prisma/seed.ts
 ```
 
 Verification:

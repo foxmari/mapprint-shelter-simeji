@@ -13,7 +13,7 @@ async function main() {
     for (const row of rows) {
       const columns = row.split(',');
       const name = columns[3].trim();
-      const location = columns[4].trim();
+      const location = '{ "lat":' + columns[14].trim() + ', "lon":' + columns[15].trim() + '}';
 
       await prisma.shelter.create({
         data: {
